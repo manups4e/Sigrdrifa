@@ -63,9 +63,14 @@ end
 --- Encrypts any Lua object
 function Encryption.EncryptObject(obj, key, algo)
     if obj == nil then return nil end
-    assert(key ~= nil and #key > 3,
-        "^1[Encryption] EncryptObject Error: encryption key can't be null or shorter than 3 characters")
-    algo = algo or Encryption.Algos.SHA256
+    if key == nil then
+        return nil, "INVALID_KEY"
+     end
+     if #key < 3 then
+         return nil, "KEY_TOO_SHORT"
+     end
+
+     algo = algo or Encryption.Algos.SHA256
 
     local jsonStr = json.encode(obj)
     local payload = MAGIC_MARKER .. algo .. "|" .. jsonStr
@@ -87,8 +92,12 @@ function Encryption.DecryptObject(encryptedData, key, forceAlgo)
     if not encryptedData or #encryptedData == 0 then
         return nil, "EMPTY_DATA"
     end
-    assert(key ~= nil and #key > 3,
-        "^1[Encryption] DecryptObject Error: encryption key can't be null or shorter than 3 characters")
+    if key == nil then
+       return nil, "INVALID_KEY"
+    end
+    if #key < 3 then
+        return nil, "KEY_TOO_SHORT"
+    end
 
     -- Use the Enum for the retry list
     local algosToTry = forceAlgo and { forceAlgo } or {
