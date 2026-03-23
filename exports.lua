@@ -1,4 +1,24 @@
 -------------------------------------------------------------------------------
+-- S I G R D R Í F A   C U R V E 2 5 5 1 9   E X P O R T S
+-- Advanced Elliptic Curve Diffie-Hellman (ECDH) logic
+-------------------------------------------------------------------------------
+
+--- Generates a new Curve25519 KeyPair for the caller
+-- This creates a temporary instance, generates keys, and returns them as byte tables.
+-- @return table: { privateKey = byte[], publicKey = byte[] }
+exports('GenerateKeyPair', function()
+    return Encryption.GenerateKeyPair()
+end)
+
+--- Calculates a Shared Secret using a Private Key and a Remote Public Key
+-- @param privateKey table: The byte array of your local private key
+-- @param remotePublicKey table: The byte array of the received public key
+-- @return table: The shared secret byte array (32 bytes)
+exports('GetSharedSecret', function(privateKey, remotePublicKey)
+    return Encryption.GetSharedSecret(privateKey, remotePublicKey)
+end)
+
+-------------------------------------------------------------------------------
 -- S I G R D R Í F A   F I V E M   E X P O R T S
 -- Official Valkyrie Release - Secure Logic Bridge
 -------------------------------------------------------------------------------

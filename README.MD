@@ -31,62 +31,139 @@ shared_scripts {
 
 ---
 
-## API Reference (Exports)
+## Curve25519 Handshake Protocol
 
-### Default Algorithm Specification
+To achieve maximum security, Sigrdrifa implements the Elliptic Curve Diffie-Hellman (ECDH) protocol. This allows the Client and Server to derive a **Shared Secret** without ever exchanging private keys over the network.
 
-Sigrdrifa is designed with a "Secure-by-Default" philosophy. For both encryption and decryption operations, the suite implements a fallback mechanism:
 
-- **Encryption**: If no algorithm is explicitly defined in the `algo` parameter, the system defaults to **SHA-256** for key derivation.
-- **Decryption**: The system will automatically attempt to validate the payload using the internal Magic Marker. If no specific algorithm is forced, it will iterate through the supported algorithms, starting with **SHA-256** as the primary candidate.
 
-#### Example of Default Usage
+---
+
+### Implementation Example
+
+#### 1. Client-Side Initialization
+The client generates a temporary key pair and transmits only the Public Key to the server.
+
 ```lua
--- This will automatically use SHA-256
-local encrypted = exports['sigrdrifa']:EncryptObject(myData, myKey)
+local myKeys = nil
+local secureSessionKey = nil
 
--- This will automatically detect the algorithm or fallback to SHA-256
-local decrypted = exports['sigrdrifa']:DecryptObject(encrypted, myKey)
+Citizen.CreateThread(function()
+    -- Generate local Private and Public keys
+    myKeys = exports['sigrdrifa']:GenerateKeyPair()
+    
+    -- Send ONLY the Public Key to the server
+    TriggerServerEvent('sigrdrifa:initiateHandshake', myKeys.publicKey)
+end)
+
+-- Receive the Server's Public Key to complete the bridge
+RegisterNetEvent('sigrdrifa:finalizeHandshake', function(serverPublicKey)
+    -- Derive the Shared Secret: (My Private Key + Server Public Key)
+    -- This 'secureSessionKey' is a byte table ready for Encrypt/Decrypt
+    secureSessionKey = exports['sigrdrifa']:GetSharedSecret(myKeys.privateKey, serverPublicKey)
+    
+    print("Secure bridge established. Ready for encrypted transmission.")
+end)
 ```
 
-To optimize performance for high-frequency data (e.g., entity positions or inventory sync), it is recommended to explicitly pass `Encryption.Algos.BLAKE3` to override the default SHA-256 behavior.
+#### 2. Server-Side Handshake Management
+The server receives the client's public key, generates its own pair, and calculates the same shared secret.
 
+```lua
+local ActiveSessions = {}
 
-### Object Encryption
-Encrypts any Lua data type (tables, strings, numbers, booleans) using JSON serialization as the intermediate transport format.
+RegisterNetEvent('sigrdrifa:initiateHandshake', function(clientPublicKey)
+    local _source = source
+    
+    -- Generate a unique KeyPair for this specific session
+    local serverKeys = exports['sigrdrifa']:GenerateKeyPair()
+    
+    -- Derive the Shared Secret: (Server Private Key + Client Public Key)
+    local sharedSecret = exports['sigrdrifa']:GetSharedSecret(serverKeys.privateKey, clientPublicKey)
+    
+    -- Store the secret mapped to the player's source ID
+    ActiveSessions[_source] = sharedSecret
+    
+    -- Send the Server's Public Key back to the client
+    TriggerClientEvent('sigrdrifa:finalizeHandshake', _source, serverKeys.publicKey)
+end)
+
+-- Cleanup session on disconnect
+AddEventHandler('playerDropped', function()
+    ActiveSessions[source] = nil
+end)
+```
+
+---
+
+### Why use Curve25519?
+
+1. **No Static Passphrases**: There is no "hardcoded" password in your scripts that can be dumped or leaked.
+2. **Perfect Forward Secrecy**: Every time a player connects, a new, unique secret is generated. If one session is compromised, others remain secure.
+3. **Man-in-the-Middle Resistance**: Even if an attacker intercepts both Public Keys during transit, it is mathematically impossible to calculate the Shared Secret without possessing at least one of the Private Keys.
+4. **Environment Isolation**: Private keys remain local to their environment (Client or Server) and are never exposed to the network.
+
+⚠️ **WARNING**: Do **NOT** use Sigrdrifa to encrypt data intended for long-term storage (like SQL databases) using session keys. These keys change every startup and for every client. For persistent storage, use a static, server-side-only passphrase.
+
+---
+
+### Secure Data Transmission
+Once the `secureSessionKey` is established, it can be passed directly into the encryption exports. The system automatically detects if you are using a string passphrase or a byte table key.
+
+```lua
+-- Client sending to Server
+local encrypted = exports['sigrdrifa']:EncryptObject({item = "diamond", amount = 1}, secureSessionKey)
+local b64 = exports['sigrdrifa']:ToBase64(encrypted)
+TriggerServerEvent('inventory:secureDrop', b64)
+```
+
+---
+
+## API Reference (Exports)
+
+### Data Transformation & Utilities
+
+Sigrdrifa provides specialized utilities to handle the transition between raw bytes and transportable formats.
+
+| Function | Purpose |
+| :--- | :--- |
+| `ToBase64` | Converts encrypted bytes into a Base64 string. **Required** for sending data through FiveM Events to prevent data corruption. |
+| `ToHex` | Converts bytes into a Hexadecimal string. Useful for logging and technical debugging. |
+| `ToEscapedString` | Sanitizes binary data for console output. Replaces control characters (like new lines) with readable escapes (e.g., `\10`) to keep the console clean. |
+
+#### Transformation Example
+```lua
+local encrypted = exports['sigrdrifa']:EncryptObject(data, key)
+
+-- CORRECT: Send this to Server
+local networkData = exports['sigrdrifa']:ToBase64(encrypted)
+
+-- DEBUG: Print this to F8 Console
+print("Raw Payload: " .. exports['sigrdrifa']:ToEscapedString(encrypted))
+```
+
+### Encryption & Decryption
+
+- **EncryptObject**: Serializes any Lua object to JSON and encrypts it. Defaults to **SHA-256** if no algorithm is specified.
+- **DecryptObject**: Decrypts the payload and returns the original Lua object. Features an **Iterative Engine** that automatically attempts all supported algorithms to find a match.
 
 ```lua
 -- Syntax: exports['sigrdrifa']:EncryptObject(object, key, algorithm)
-local data = { accountId = 550, balance = 25000 }
-local encrypted = exports['sigrdrifa']:EncryptObject(data, "session_secret", "blake3")
-```
-
-### Object Decryption
-Automatically detects the encryption algorithm via the internal Magic Marker (FX!) and restores the original Lua object.
-
-```lua
 -- Syntax: exports['sigrdrifa']:DecryptObject(byteTable, key)
-local decoded, err = exports['sigrdrifa']:DecryptObject(encrypted, "session_secret")
-
-if not decoded then
-    -- Handle error (e.g., "INVALID_KEY_OR_ALGO")
-    print("Security Error: " .. err)
-end
 ```
 
-### Utility and Transformation
-- **GetAlgos**: Returns the `Encryption.Algos` enum for type-safe algorithm selection.
-- **ToBase64**: Encodes encrypted byte tables into Base64 strings for stable network transmission via standard FiveM events.
-- **ToHex**: Converts byte arrays to hexadecimal strings for logging purposes.
-- **ToEscapedString**: Sanitizes binary data for console output, escaping control characters like `\n` to prevent terminal formatting issues.
+### Utility and Enums
+- **GetAlgos**: Returns the `Encryption.Algos` enum table.
+- **GenerateKeyPair**: Returns `{ privateKey, publicKey }`.
+- **GetSharedSecret**: Returns the 32-byte shared secret table.
 
 ---
 
 ## Security Best Practices
 
-1. **Algorithm Selection**: For high-frequency server-side operations, the use of `BLAKE3` is recommended due to its superior throughput and minimal CPU overhead compared to SHA-256.
-2. **Key Management**: While the logic is shared, private keys must remain local to their respective environments. Use Curve25519 to establish a unique Shared Secret for each session.
-3. **Network Transit**: Always encode encrypted byte tables to Base64 using `ToBase64` before passing them through `TriggerServerEvent` or `TriggerClientEvent` to avoid data corruption from null-bytes or control characters.
+1. **Algorithm Selection**: Use `BLAKE3` for high-frequency data to minimize CPU overhead.
+2. **Network Transit**: **Always** use `ToBase64` before triggering events. Raw encrypted bytes contain null characters that will truncate or corrupt the event payload.
+3. **Clean-up**: Always clear server-side session keys on `playerDropped` to prevent memory leaks.
 
 ---
 
