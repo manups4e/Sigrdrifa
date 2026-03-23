@@ -18,8 +18,8 @@ local function RunSigrdrifaTests()
     -- TEST 1: Table Encryption & Decryption
     ---------------------------------------------------------------------------
     local tableData = { id = 1, name = "Sigurd", gear = {"Sword", "Shield"}, power = 9001 }
-    local encTable = Encryption.EncryptObject(tableData, testKey, Encryption.Algos.SHA256)
-    local decTable = Encryption.DecryptObject(encTable, testKey)
+    local encTable = Encryption.EncryptObject(tableData, testKey, Encryption.Algos.CHACHA20)
+    local decTable = Encryption.DecryptObject(encTable, testKey,Encryption.Algos.CHACHA20)
 
     if decTable and decTable.name == "Sigurd" and decTable.gear[1] == "Sword" then
         print("^2[PASS]^7 Test 1: Complex Table Integrity")
