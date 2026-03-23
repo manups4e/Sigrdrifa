@@ -23,7 +23,7 @@ fx_version 'cerulean'
 game 'gta5'
 
 shared_scripts {
-    'lib/sha.lua',           -- Core Hashing Library
+    'lib/sha2.lua',          -- Core Hashing Library
     'lib/curve25519.lua',    -- Elliptic Curve Mathematics
     'lib/encryption.lua'     -- Sigrdrifa Wrapper
 }
