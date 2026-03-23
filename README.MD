@@ -43,10 +43,10 @@ Sigrdrifa is designed with a "Secure-by-Default" philosophy. For both encryption
 #### Example of Default Usage
 ```lua
 -- This will automatically use SHA-256
-local encrypted = exports['sigrdrifa']:Encrypt(myData, myKey)
+local encrypted = exports['sigrdrifa']:EncryptObject(myData, myKey)
 
 -- This will automatically detect the algorithm or fallback to SHA-256
-local decrypted = exports['sigrdrifa']:Decrypt(encrypted, myKey)
+local decrypted = exports['sigrdrifa']:DecryptObject(encrypted, myKey)
 ```
 
 To optimize performance for high-frequency data (e.g., entity positions or inventory sync), it is recommended to explicitly pass `Encryption.Algos.BLAKE3` to override the default SHA-256 behavior.
