@@ -19,6 +19,7 @@ version '1.0.0'
 
 shared_scripts {
   "lib/sha2.lua",
+  "lib/chacha20.lua",
   "lib/Curve25519.lua",
   "lib/Encryption.lua",
   "exports.lua",

@@ -9,27 +9,30 @@ Encryption = {}
 
 -- Recovery of the SHA module via Getter
 local crypto = GetShaObject()
+local chacha = GetChaCha20()
 local MAGIC_MARKER = "FX!"
 
 -- ENUM for Algorithms
 Encryption.Algos = {
     -- Classic
-    MD5      = "md5",
-    SHA1     = "sha1",
+    CHACHA20  = "chacha20",  -- for speed at max
+    XCHACHA20 = "xchacha20", -- for speed with maximum performances (best fivem approach)
+    MD5       = "md5",
+    SHA1      = "sha1",
 
     -- SHA-2 (Standard)
-    SHA224   = "sha224",
-    SHA256   = "sha256",
-    SHA384   = "sha384",
-    SHA512   = "sha512",
+    SHA224    = "sha224",
+    SHA256    = "sha256",
+    SHA384    = "sha384",
+    SHA512    = "sha512",
 
     -- SHA-3 (Modern & Ultra-Secure)
-    SHA3_256 = "sha3_256",
-    SHA3_512 = "sha3_512",
+    SHA3_256  = "sha3_256",
+    SHA3_512  = "sha3_512",
 
     -- BLAKE (High Performance)
-    BLAKE2B  = "blake2b",
-    BLAKE3   = "blake3", -- Highly suggested as it appears to be the most performant on FiveM
+    BLAKE2B   = "blake2b",
+    BLAKE3    = "blake3",
 }
 math.randomseed(GetGameTimer())
 
@@ -86,25 +89,62 @@ function Encryption.GetSharedSecret(privateKey, remotePublicKey)
 end
 
 --- Encrypts any Lua object
+--- Encrypts any Lua object into a byte table
+-- Supports tables, strings, numbers, and booleans.
+-- @param obj any: The data to protect
+-- @param key string/table: The passphrase or shared secret
+-- @param algo string: (Optional) Encryption/Hash algorithm
+-- @return table: Encrypted byte array
 function Encryption.EncryptObject(obj, key, algo)
-    if obj == nil then return nil end
-    if key == nil then
-        return nil, "INVALID_KEY"
-    end
-    if #key < 3 then
-        return nil, "KEY_TOO_SHORT"
-    end
+    if obj == nil or key == nil then return nil end
+    if #key < 3 then return nil, "KEY_TOO_SHORT" end
 
+    -- Default to SHA256 if no algorithm is provided
     algo = algo or Encryption.Algos.SHA256
-
     local jsonStr = json.encode(obj)
+
+    ---------------------------------------------------------------------------
+    -- CHACHA20 / XCHACHA20 LOGIC
+    ---------------------------------------------------------------------------
+    if algo == Encryption.Algos.CHACHA20 or algo == Encryption.Algos.XCHACHA20 then
+        -- ChaCha20 requires a strict 32-byte key.
+        -- If a string is provided, we hash it to SHA256 (32 bytes) to ensure compatibility.
+        local rawKey = type(key) == "string" and
+        Encryption.BytesToBinaryString(Encryption.GenerateHash(key, Encryption.Algos.SHA256)) or key
+
+        -- Generate a unique random Nonce (12 bytes for ChaCha20, 24 bytes for XChaCha20)
+        -- Using a unique nonce per message is critical to prevent stream cipher reuse attacks.
+        local nonceSize = (algo == Encryption.Algos.XCHACHA20) and 24 or 12
+        local nonce = util.getRandomString(nonceSize)
+
+        -- Perform encryption (returns a binary string)
+        local encrypted
+        if algo == Encryption.Algos.XCHACHA20 then
+            encrypted = chacha.xchacha20_encrypt(rawKey, 0, nonce, jsonStr)
+        else
+            encrypted = chacha.chacha20_encrypt(rawKey, 0, nonce, jsonStr)
+        end
+
+        -- Build final payload: MAGIC_MARKER + ALGO + SEPARATOR + NONCE + CIPHERTEXT
+        -- This allows the decryptor to know exactly which settings were used.
+        local finalStr = MAGIC_MARKER .. algo .. "|" .. nonce .. encrypted
+
+        -- Convert the binary string back to a byte table for consistency with FiveM exports
+        return { string.byte(finalStr, 1, #finalStr) }
+    end
+
+    ---------------------------------------------------------------------------
+    -- CLASSIC XOR LOGIC (Fallback/Standard Hashes)
+    ---------------------------------------------------------------------------
     local payload = MAGIC_MARKER .. algo .. "|" .. jsonStr
     local dataBytes = { string.byte(payload, 1, #payload) }
 
+    -- Generate the keystream bytes based on the provided key and hash algorithm
     local keyBytes = type(key) == "string" and Encryption.GenerateHash(key, algo) or key
 
     local output = {}
     for i = 1, #dataBytes do
+        -- Apply circular XOR against the keystream
         local keyByte = keyBytes[((i - 1) % #keyBytes) + 1]
         output[i] = dataBytes[i] ~ keyByte
     end
@@ -112,51 +152,93 @@ function Encryption.EncryptObject(obj, key, algo)
     return output
 end
 
---- Decrypts and validates integrity
+--- Decrypts a byte array and validates its integrity
+-- @param encryptedData table: The array of encrypted bytes
+-- @param key string: The decryption key/passphrase
+-- @param forceAlgo string: (Optional) Specifically force a certain algorithm
+-- @return any: The original decoded object, or nil if decryption fails
 function Encryption.DecryptObject(encryptedData, key, forceAlgo)
-    if not encryptedData or #encryptedData == 0 then
-        return nil, "EMPTY_DATA"
-    end
-    if key == nil then
-        return nil, "INVALID_KEY"
-    end
-    if #key < 3 then
-        return nil, "KEY_TOO_SHORT"
-    end
+    if not encryptedData or #encryptedData == 0 then return nil, "EMPTY_DATA" end
+    if key == nil or #key < 3 then return nil, "INVALID_KEY" end
 
-    -- Use the Enum for the retry list
+    -- Determine which algorithms to attempt (ChaCha variants prioritized for speed/security)
     local algosToTry = forceAlgo and { forceAlgo } or {
+        Encryption.Algos.XCHACHA20,
+        Encryption.Algos.CHACHA20,
         Encryption.Algos.BLAKE3,
         Encryption.Algos.SHA256,
         Encryption.Algos.SHA512,
-        Encryption.Algos.SHA3_256,
         Encryption.Algos.MD5,
         Encryption.Algos.SHA1,
         Encryption.Algos.SHA224,
         Encryption.Algos.SHA384,
+        Encryption.Algos.SHA3_256,
         Encryption.Algos.SHA3_512,
-        Encryption.Algos.BLAKE2B,
+        Encryption.Algos.BLAKE2B
     }
 
     for _, algo in ipairs(algosToTry) do
-        local keyBytes = type(key) == "string" and Encryption.GenerateHash(key, algo) or key
-        if not keyBytes then goto next_algo end
+        local decryptedStr = ""
 
-        local decryptedChars = {}
-        for i = 1, #encryptedData do
-            local keyByte = keyBytes[((i - 1) % #keyBytes) + 1]
-            decryptedChars[i] = string.char(encryptedData[i] ~ keyByte)
+        if algo == Encryption.Algos.XCHACHA20 or algo == Encryption.Algos.CHACHA20 then
+            -------------------------------------------------------------------
+            -- CHACHA20 DECRYPTION PROCESS
+            -------------------------------------------------------------------
+            -- Convert byte table back to a binary string for processing
+            local fullBinary = Encryption.BytesToBinaryString(encryptedData)
+
+            -- Prepare the 32-byte key (hashed if necessary)
+            local rawKey = type(key) == "string" and
+            Encryption.BytesToBinaryString(Encryption.GenerateHash(key, Encryption.Algos.SHA256)) or key
+
+            -- Define expected header to locate the Nonce and Ciphertext start positions
+            local expectedHeader = MAGIC_MARKER .. algo .. "|"
+            local nonceSize = (algo == Encryption.Algos.XCHACHA20) and 24 or 12
+
+            -- Extract Nonce and Ciphertext from the raw payload
+            local startOffset = #expectedHeader + 1
+            local nonce = fullBinary:sub(startOffset, startOffset + nonceSize - 1)
+            local ciphertext = fullBinary:sub(startOffset + nonceSize)
+
+            -- Proceed if the nonce length is valid
+            if #nonce == nonceSize then
+                if algo == Encryption.Algos.XCHACHA20 then
+                    decryptedStr = chacha.xchacha20_decrypt(rawKey, 0, nonce, ciphertext)
+                else
+                    decryptedStr = chacha.chacha20_decrypt(rawKey, 0, nonce, ciphertext)
+                end
+            end
+        else
+            -------------------------------------------------------------------
+            -- XOR DECRYPTION PROCESS
+            -------------------------------------------------------------------
+            local keyBytes = type(key) == "string" and Encryption.GenerateHash(key, algo) or key
+            local chars = {}
+            for i = 1, #encryptedData do
+                local keyByte = keyBytes[((i - 1) % #keyBytes) + 1]
+                chars[i] = string.char(encryptedData[i] ~ keyByte)
+            end
+            decryptedStr = table.concat(chars)
         end
 
-        local fullStr = table.concat(decryptedChars)
+        -----------------------------------------------------------------------
+        -- FINAL VALIDATION & JSON DECODING
+        -----------------------------------------------------------------------
+        -- Check if the decrypted string starts with the Magic Marker (Integrity Check)
+        if decryptedStr:sub(1, #MAGIC_MARKER) == MAGIC_MARKER or (algo:find("chacha") and decryptedStr ~= "") then
+            local jsonStr = decryptedStr
 
-        if fullStr:sub(1, #MAGIC_MARKER) == MAGIC_MARKER then
-            local headerEnd = fullStr:find("|")
-            if headerEnd then
-                local jsonStr = fullStr:sub(headerEnd + 1)
-                local success, result = pcall(json.decode, jsonStr)
-                if success then return result, nil end
+            -- If the marker is embedded in the string (XOR style), extract the JSON part
+            if decryptedStr:sub(1, #MAGIC_MARKER) == MAGIC_MARKER then
+                local headerEnd = decryptedStr:find("|")
+                if headerEnd then
+                    jsonStr = decryptedStr:sub(headerEnd + 1)
+                end
             end
+
+            -- Attempt to decode the JSON payload back into its original Lua type
+            local success, result = pcall(json.decode, jsonStr)
+            if success then return result, nil end
         end
 
         ::next_algo::
