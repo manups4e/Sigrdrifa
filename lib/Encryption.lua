@@ -38,7 +38,11 @@ Encryption.Algos = {
 }
 
 -- Initialize random seed with game timer and system time
-math.randomseed(math.floor(GetGameTimer() * os.time()))
+if IsDuplicityVersion() then
+    math.randomseed(math.floor(GetGameTimer() * os.time()))
+else
+    math.randomseed(math.floor(GetGameTimer()))
+end
 
 -------------------------------------------------------------------------------
 -- 1. INTERNAL HELPERS
